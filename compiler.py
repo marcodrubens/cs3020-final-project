@@ -17,7 +17,6 @@ global_logging = True
 tuple_var_types = {}
 function_names = set()
 
-
 def log(label, value):
     if global_logging:
         print()
@@ -57,12 +56,10 @@ def gensym(x):
 
 TEnv = Dict[str, type]
 
-
 @dataclass
 class Callable:
     args: List[type]
     output_type: type
-
 
 def typecheck(program: Program) -> Program:
     """
@@ -72,29 +69,29 @@ def typecheck(program: Program) -> Program:
     """
 
     prim_arg_types = {
-        'add': [int, int],
-        'sub': [int, int],
-        'mult': [int, int],
+        'add':   [int, int],
+        'sub':   [int, int],
+        'mult':  [int, int],
         'not': [bool],
-        'or': [bool, bool],
-        'and': [bool, bool],
-        'gt': [int, int],
-        'gte': [int, int],
-        'lt': [int, int],
-        'lte': [int, int],
+        'or':  [bool, bool],
+        'and':  [bool, bool],
+        'gt':   [int, int],
+        'gte':  [int, int],
+        'lt':   [int, int],
+        'lte':  [int, int],
     }
 
     prim_output_types = {
-        'add': int,
-        'sub': int,
-        'mult': int,
+        'add':   int,
+        'sub':   int,
+        'mult':  int,
         'not': bool,
-        'or': bool,
-        'and': bool,
-        'gt': bool,
-        'gte': bool,
-        'lt': bool,
-        'lte': bool,
+        'or':  bool,
+        'and':  bool,
+        'gt':   bool,
+        'gte':  bool,
+        'lt':   bool,
+        'lte':  bool,
     }
 
     def tc_exp(e: Expr, env: TEnv) -> type:
@@ -115,6 +112,10 @@ def typecheck(program: Program) -> Program:
                     return bool
                 elif isinstance(i, int):
                     return int
+                elif isinstance(i, str):
+                    return str
+                elif isinstance(i, float):
+                    return float
                 else:
                     raise Exception('tc_exp', e)
             case Prim('eq', [e1, e2]):
@@ -317,7 +318,6 @@ def explicate_control(prog: Program) -> cif.CProgram:
 
             return cif.CProgram(function_defs)
 
-
 def _explicate_control(current_function: str, prog: Program) -> cif.CProgram:
     """
     Transforms an Lif Expression into a Cif program.
@@ -382,7 +382,7 @@ def _explicate_control(current_function: str, prog: Program) -> cif.CProgram:
                 then_label = create_block()
                 else_label = create_block()
                 continuation_label = create_block()
-
+                
                 then_continuation = explicate_stmts(then_stmts, then_label)
                 add_stmt(then_continuation, cif.Goto(continuation_label))
 
@@ -410,6 +410,7 @@ def _explicate_control(current_function: str, prog: Program) -> cif.CProgram:
                 return continuation_label
             case _:
                 raise Exception('explicate_stmt', stmt)
+
 
     def explicate_stmts(stmts: List[Stmt], label: str) -> str:
         for s in stmts:
@@ -444,11 +445,9 @@ class X86FunctionDef(AST):
     blocks: Dict[str, List[x86.Instr]]
     stack_space: Tuple[int, int]
 
-
 @dataclass(frozen=True, eq=True)
 class X86ProgramDefs(AST):
     defs: List[X86FunctionDef]
-
 
 def select_instructions(prog: cif.CProgram) -> X86ProgramDefs:
     """
@@ -503,7 +502,7 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
 
         # shift the pointer mask by 6 bits to make room for the length field
         mask_and_len = pointer_mask << 6
-        mask_and_len = mask_and_len + len(types)  # add the length
+        mask_and_len = mask_and_len + len(types) # add the length
 
         # shift the mask and length by 1 bit to make room for the forwarding bit
         tag = mask_and_len << 1
@@ -513,7 +512,7 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
 
     def si_expr(a: cif.Expr) -> x86.Arg:
         match a:
-            case cif.Constant(i):
+            case cif.Constant(i) if isinstance(i, int):
                 return x86.Immediate(int(i))
             case cif.Var(x):
                 return x86.Var(x)
@@ -564,12 +563,23 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
                 return instrs
             case cif.Assign(x, cif.Prim('tuple', args)):
                 tag = mk_tag(tuple_var_types[x])
-                instrs = [x86.Movq(x86.Immediate(8 * (1 + len(args))), x86.Reg('rdi')),
+                instrs = [x86.Movq(x86.Immediate(8*(1+len(args))), x86.Reg('rdi')),
                           x86.Callq('allocate'),
                           x86.Movq(x86.Reg('rax'), x86.Reg('r11')),
                           x86.Movq(x86.Immediate(tag), x86.Deref('r11', 0))]
                 for i, a in enumerate(args):
-                    instrs.append(x86.Movq(si_expr(a), x86.Deref('r11', 8 * (i + 1))))
+                    instrs.append(x86.Movq(si_expr(a), x86.Deref('r11', 8*(i+1))))
+                instrs.append(x86.Movq(x86.Reg('r11'), x86.Var(x)))
+                return instrs
+            case cif.Assign(x, cif.Constant(s)) if isinstance(s, str):
+                tag = mk_tag(tuple_var_types[x])
+                ascii_codes = [ord(c) for c in s]
+                instrs = [x86.Movq(x86.Immediate(8 * (1+len(ascii_codes))), x86.Reg('rdi')),
+                          x86.Callq('allocate'),
+                          x86.Movq(x86.Reg('rax'), x86.Reg('r11')),
+                          x86.Movq(x86.Immediate(tag), x86.Deref('r11', 0))]
+                for i, a in enumerate(ascii_codes):
+                    instrs.append(x86.Movq(x86.Immediate(a), x86.Deref('r11', 8 * (i + 1))))
                 instrs.append(x86.Movq(x86.Reg('r11'), x86.Var(x)))
                 return instrs
             case cif.Assign(x, cif.Prim('subscript', [atm1, cif.Constant(idx)])):
@@ -634,7 +644,6 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
 Color = int
 Coloring = Dict[x86.Var, Color]
 Saturation = Set[Color]
-
 
 def allocate_registers(program: X86ProgramDefs) -> X86ProgramDefs:
     """
@@ -909,7 +918,7 @@ def _allocate_registers(current_function: str, program: x86.X86Program) -> x86.X
             r = available_registers.pop()
             color_map[color] = x86.Reg(r)
         else:
-            offset = stack_locations_used + 1
+            offset = stack_locations_used+1
             color_map[color] = x86.Deref('rbp', -(offset * 8))
             stack_locations_used += 1
 
@@ -925,7 +934,8 @@ def _allocate_registers(current_function: str, program: x86.X86Program) -> x86.X
     regular_stack_space = align(8 * stack_locations_used)
     root_stack_slots = len(tuple_homes)
 
-    return x86.X86Program(new_blocks, stack_space=(regular_stack_space, root_stack_slots))
+    return x86.X86Program(new_blocks, stack_space = (regular_stack_space, root_stack_slots))
+
 
 
 ##################################################
@@ -998,7 +1008,7 @@ def _patch_instructions(program: x86.X86Program) -> x86.X86Program:
     match program:
         case x86.X86Program(blocks, stack_space):
             new_blocks = {label: pi_block(block) for label, block in blocks.items()}
-            return x86.X86Program(new_blocks, stack_space=stack_space)
+            return x86.X86Program(new_blocks, stack_space = stack_space)
 
 
 ##################################################
@@ -1065,7 +1075,7 @@ def _prelude_and_conclusion(current_function: str, program: x86.X86Program) -> x
 
     # Conclusion
     conclusion = [x86.Addq(x86.Immediate(stack_bytes), x86.Reg('rsp')),
-                  x86.Subq(x86.Immediate(8 * root_stack_locations), x86.Reg('r15'))]
+                  x86.Subq(x86.Immediate(8*root_stack_locations), x86.Reg('r15'))]
 
     for r in reversed(constants.callee_saved_registers):
         conclusion += [x86.Popq(x86.Reg(r))]
@@ -1076,7 +1086,7 @@ def _prelude_and_conclusion(current_function: str, program: x86.X86Program) -> x
     new_blocks = program.blocks.copy()
     new_blocks[current_function] = prelude
     new_blocks[current_function + 'conclusion'] = conclusion
-    return x86.X86Program(new_blocks, stack_space=program.stack_space)
+    return x86.X86Program(new_blocks, stack_space = program.stack_space)
 
 
 ##################################################
@@ -1106,7 +1116,6 @@ allocate_alloc:
   retq
 """
     return program + alloc
-
 
 ##################################################
 # Compiler definition
