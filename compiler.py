@@ -605,8 +605,13 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
             case cif.Assign(x, atm1):
                 return [x86.Movq(si_expr(atm1), x86.Var(x))]
             case cif.Print(atm1):
-                return [x86.Movq(si_expr(atm1), x86.Reg('rdi')),
-                        x86.Callq('print_int')]
+                match atm1:
+                    case cif.Var(x) if x in tuple_var_types:
+                        return [x86.Movq(si_expr(atm1), x86.Reg('rdi')),
+                                x86.Callq('print_string')]
+                    case _:
+                        return [x86.Movq(si_expr(atm1), x86.Reg('rdi')),
+                                x86.Callq('print_int')]
             case cif.Return(atm1):
                 return [x86.Movq(si_expr(atm1), x86.Reg('rax')),
                         x86.Jmp(current_function + 'conclusion')]
