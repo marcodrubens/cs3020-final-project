@@ -572,9 +572,10 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
                 instrs.append(x86.Movq(x86.Reg('r11'), x86.Var(x)))
                 return instrs
             case cif.Assign(x, cif.Constant(s)) if isinstance(s, str):
+                ascii_codes = [ord(c) for c in s] + [0] 
+                tuple_var_types[x] = tuple(['int'] * len(ascii_codes))
                 tag = mk_tag(tuple_var_types[x])
-                ascii_codes = [ord(c) for c in s]
-                instrs = [x86.Movq(x86.Immediate(8 * (1+len(ascii_codes))), x86.Reg('rdi')),
+                instrs = [x86.Movq(x86.Immediate(8 * (1 + len(ascii_codes))), x86.Reg('rdi')),
                           x86.Callq('allocate'),
                           x86.Movq(x86.Reg('rax'), x86.Reg('r11')),
                           x86.Movq(x86.Immediate(tag), x86.Deref('r11', 0))]
