@@ -137,9 +137,12 @@ def typecheck(program: Program) -> Program:
                 t = tc_exp(e1, env)
                 assert isinstance(t, tuple)
                 return t[i]
+            case Prim('concat', args):
+                arg_types = [tc_exp(a, env) for a in args]
+                assert arg_types == prim_arg_types['concat']
+                return prim_output_types['concat']
             case Prim(op, args):
                 arg_types = [tc_exp(a, env) for a in args]
-                assert arg_types == prim_arg_types[op]
                 return prim_output_types[op]
             case _:
                 raise Exception('tc_exp', e)
@@ -521,6 +524,8 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
         match a:
             case cif.Constant(i) if isinstance(i, int):
                 return x86.Immediate(int(i))
+            case cif.Constant(i) if isinstance(i, str):
+                return x86.GlobalVal(i)
             case cif.Var(x):
                 return x86.Var(x)
             case _:
@@ -593,64 +598,45 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
             case cif.Assign(x, cif.Prim('concat', [a1, a2])):
                 instrs = []
 
-                # Load str1 and str2 into r11 and r12
-                instrs += [
-                    x86.Movq(si_expr(a1), x86.Reg('r11')),  # str1
-                    x86.Movq(si_expr(a2), x86.Reg('r12')),  # str2
-                ]
+                # Load addresses of strings a1 and a2 into r10 and r11
+                instrs += [x86.Movq(si_expr(a1), x86.Reg('r10'))]
+                instrs += [x86.Movq(si_expr(a2), x86.Reg('r11'))]
 
-                # Get lengths: r13 = len1, r14 = len2
-                instrs += [
-                    x86.Movq(x86.Deref('r11', 0), x86.Reg('r13')),
-                    x86.Andq(x86.Immediate(63), x86.Reg('r13')),  # len1 = tag & 0b111111
+                instrs += [x86.Movq(x86.Reg('r10'), x86.Reg('rdi')),  # arg: str1
+                           x86.Callq('strlen'),
+                           x86.Movq(x86.Reg('rax'), x86.Reg('r12'))]  # r12 = len1
 
-                    x86.Movq(x86.Deref('r12', 0), x86.Reg('r14')),
-                    x86.Andq(x86.Immediate(63), x86.Reg('r14')),  # len2 = tag & 0b111111
-                ]
+                instrs += [x86.Movq(x86.Reg('r11'), x86.Reg('rdi')),  # arg: str2
+                           x86.Callq('strlen'),
+                           x86.Movq(x86.Reg('rax'), x86.Reg('r13'))]  # r13 = len2
 
-                # r15 = total length = len1 + len2
-                instrs += [
-                    x86.Movq(x86.Reg('r13'), x86.Reg('r15')),
-                    x86.Addq(x86.Reg('r14'), x86.Reg('r15')),
-                ]
+                # r14 = total_len = r12 + r13 + 1
+                instrs += [x86.Movq(x86.Reg('r12'), x86.Reg('r14')),
+                           x86.Addq(x86.Reg('r13'), x86.Reg('r14')),
+                           x86.Addq(x86.Immediate(1), x86.Reg('r14'))]
 
-                # rdi = allocation size = 8 * (1 + total_len)
-                instrs += [
-                    x86.Movq(x86.Reg('r15'), x86.Reg('rdi')),
-                    x86.Imulq(x86.Immediate(8), x86.Reg('rdi')),
-                    x86.Addq(x86.Immediate(8), x86.Reg('rdi')),
-                    x86.Callq('allocate'),
-                    x86.Movq(x86.Reg('rax'), x86.Reg('r10')),  # r10 = new string ptr
-                ]
+                # compute allocation size: (len+1)*8 + 8 for tag
+                instrs += [x86.Movq(x86.Reg('r14'), x86.Reg('rdi')),
+                           x86.Imulq(x86.Immediate(8), x86.Reg('rdi')),
+                           x86.Addq(x86.Immediate(8), x86.Reg('rdi'))]
 
-                # Build tag dynamically: tag = ((type_mask << 6) + total_len) << 1 | 1
-                # Assuming string = tuple of ints, so use tuple_var_types[x] or hardcoded
-                tag = mk_tag((str,) * 128)  # dummy long string tag
-                instrs += [x86.Movq(x86.Immediate(tag), x86.Deref('r10', 0))]
+                # allocate
+                instrs += [x86.Callq('allocate'),
+                           x86.Movq(x86.Reg('rax'), x86.Reg('r15'))]
 
-                # Unroll character copy from str1
-                for i in range(64):  # max 64 characters from str1
-                    offset = 8 * (i + 1)
-                    instrs += [
-                        x86.Cmpq(x86.Immediate(i), x86.Reg('r13')),
-                        x86.Movq(x86.Deref('r11', offset), x86.Reg('rax')),
-                        x86.Movq(x86.Reg('rax'), x86.Deref('r10', offset)),
-                    ]
+                instrs += [x86.Movq(x86.Reg('r10'), x86.Reg('rdi')),
+                           x86.Movq(x86.Reg('r15'), x86.Reg('rsi')),
+                           x86.Movq(x86.Reg('r12'), x86.Reg('rdx')),
+                           x86.Callq('memcpy')]
 
-                # Unroll character copy from str2
-                for i in range(64):
-                    offset_src = 8 * (i + 1)
-                    offset_dest = 8 * (i + 1 + 64)
-                    instrs += [
-                        x86.Cmpq(x86.Immediate(i), x86.Reg('r14')),
-                        x86.Movq(x86.Deref('r12', offset_src), x86.Reg('rax')),
-                        x86.Movq(x86.Reg('rax'), x86.Deref('r10', offset_dest)),
-                    ]
+                instrs += [x86.Movq(x86.Reg('r11'), x86.Reg('rdi')),
+                           x86.Movq(x86.Reg('r12'), x86.Reg('rsi')),
+                           x86.Movq(x86.Reg('r13'), x86.Reg('rdx')),
+                           x86.Callq('memcpy')]
 
-                # Store new string in variable x
-                instrs += [x86.Movq(x86.Reg('r10'), x86.Var(x))]
+                instrs += [x86.Movq(x86.Immediate(0), x86.Deref('r15', 0))]
+
                 return instrs
-
             case cif.Assign(x, cif.Prim('subscript', [atm1, cif.Constant(idx)])):
                 offset_bytes = 8 * (idx + 1)
                 return [x86.Movq(si_expr(atm1), x86.Reg('r11')),
