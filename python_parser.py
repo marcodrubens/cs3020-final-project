@@ -1,6 +1,7 @@
 from .python_ast import *
 import ast
 
+
 # ==================================================
 # Parser & AST translator
 # ==================================================
@@ -32,15 +33,17 @@ def parse(s):
                 return Program(trans_stmts(stmts))
             case _:
                 raise Exception('trans_prog', e)
+
     def trans_stmts(stmts):
         return [trans_stmt(s) for s in stmts]
+
     def trans_classdef(decl):
         match decl:
             case ast.AnnAssign(ast.Name(x), t, _, _):
                 return (x, get_type(t))
             case _:
                 raise Exception('trans_classdef', decl)
-                
+
     def trans_stmt(s):
         match s:
             case ast.Expr(ast.Call(ast.Name('print'), [e])):
@@ -73,6 +76,7 @@ def parse(s):
                 return ClassDef(name, x, new_decls)
             case _:
                 raise Exception('trans_stmt', s)
+
     def trans_expr(e):
         match e:
             case ast.Compare(e1, [op], [e2]):
