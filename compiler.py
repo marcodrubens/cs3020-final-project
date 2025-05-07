@@ -525,7 +525,7 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
             case cif.Constant(i) if isinstance(i, int):
                 return x86.Immediate(int(i))
             case cif.Constant(i) if isinstance(i, str):
-                return x86.GlobalVal(i)
+                return x86.GlobalVal(gensym(i))
             case cif.Var(x):
                 return x86.Var(x)
             case _:
@@ -598,24 +598,26 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
             case cif.Assign(x, cif.Prim('concat', [a1, a2])):
                 instrs = []
 
-                # Load addresses of strings a1 and a2 into r10 and r11
+                # Move strings a1 and a2 into r10 and r11
                 instrs += [x86.Movq(si_expr(a1), x86.Reg('r10'))]
                 instrs += [x86.Movq(si_expr(a2), x86.Reg('r11'))]
 
-                instrs += [x86.Movq(x86.Reg('r10'), x86.Reg('rdi')),  # arg: str1
+                # get a1 length
+                instrs += [x86.Movq(x86.Reg('r10'), x86.Reg('rdi')),
                            x86.Callq('strlen'),
-                           x86.Movq(x86.Reg('rax'), x86.Reg('r12'))]  # r12 = len1
+                           x86.Movq(x86.Reg('rax'), x86.Reg('r12'))]
 
-                instrs += [x86.Movq(x86.Reg('r11'), x86.Reg('rdi')),  # arg: str2
+                # get a2 length
+                instrs += [x86.Movq(x86.Reg('r11'), x86.Reg('rdi')),
                            x86.Callq('strlen'),
-                           x86.Movq(x86.Reg('rax'), x86.Reg('r13'))]  # r13 = len2
+                           x86.Movq(x86.Reg('rax'), x86.Reg('r13'))]
 
-                # r14 = total_len = r12 + r13 + 1
+                # compute total string length
                 instrs += [x86.Movq(x86.Reg('r12'), x86.Reg('r14')),
                            x86.Addq(x86.Reg('r13'), x86.Reg('r14')),
                            x86.Addq(x86.Immediate(1), x86.Reg('r14'))]
 
-                # compute allocation size: (len+1)*8 + 8 for tag
+                # compute memory size for new string
                 instrs += [x86.Movq(x86.Reg('r14'), x86.Reg('rdi')),
                            x86.Imulq(x86.Immediate(8), x86.Reg('rdi')),
                            x86.Addq(x86.Immediate(8), x86.Reg('rdi'))]
@@ -624,18 +626,26 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
                 instrs += [x86.Callq('allocate'),
                            x86.Movq(x86.Reg('rax'), x86.Reg('r15'))]
 
+                # copy a1 to r15
                 instrs += [x86.Movq(x86.Reg('r10'), x86.Reg('rdi')),
                            x86.Movq(x86.Reg('r15'), x86.Reg('rsi')),
                            x86.Movq(x86.Reg('r12'), x86.Reg('rdx')),
                            x86.Callq('memcpy')]
 
+                # copy a2 to
                 instrs += [x86.Movq(x86.Reg('r11'), x86.Reg('rdi')),
                            x86.Movq(x86.Reg('r12'), x86.Reg('rsi')),
                            x86.Movq(x86.Reg('r13'), x86.Reg('rdx')),
                            x86.Callq('memcpy')]
 
-                instrs += [x86.Movq(x86.Immediate(0), x86.Deref('r15', 0))]
-
+                # add null terminator to the end of the new string
+                instrs += [
+                    x86.Movq(x86.Reg('r12'), x86.Reg('rdi')),
+                    x86.Addq(x86.Reg('r13'), x86.Reg('rdi')),
+                    x86.Imulq(x86.Immediate(8), x86.Reg('rdi')),
+                    x86.Addq(x86.Reg('r15'), x86.Reg('rdi')),
+                    x86.Movq(x86.Immediate(0), x86.Deref('rdi', 0))
+                ]
                 return instrs
             case cif.Assign(x, cif.Prim('subscript', [atm1, cif.Constant(idx)])):
                 offset_bytes = 8 * (idx + 1)
@@ -646,6 +656,14 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
                     return [x86.Movq(si_expr(atm1), x86.Reg('rax')),
                             binop_instrs[op](si_expr(atm2), x86.Reg('rax')),
                             x86.Movq(x86.Reg('rax'), x86.Var(x))]
+                elif op == 'eq':
+                    if atm1 in tuple_var_types and atm2 in tuple_var_types:
+                        return [x86.Movq(si_expr(atm1), x86.Reg('rdi')),
+                                x86.Movq(si_expr(atm2), x86.Reg('rsi')),
+                                x86.Callq('strcmp'),
+                                x86.Cmpq(x86.Immediate(0), x86.Reg('rax')),
+                                x86.Set('e', x86.ByteReg('al')),
+                                x86.Movzbq(x86.ByteReg('al'), x86.Var(x))]
                 elif op in op_cc:
                     return [x86.Cmpq(si_expr(atm2), si_expr(atm1)),
                             x86.Set(op_cc[op], x86.ByteReg('al')),
